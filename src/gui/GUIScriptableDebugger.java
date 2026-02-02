@@ -165,10 +165,37 @@ public class GUIScriptableDebugger {
         vm.eventRequestManager().deleteEventRequest(sr);
 
         currentThread = event.thread();
+
+        // Verifie si on est dans du code JDK - si oui, continue automatiquement
+        String className = event.location().declaringType().name();
+        if (isJdkClass(className)) {
+            // Re-cree un step request pour continuer jusqu'au code utilisateur
+            listener.onOutput("(skipping JDK: " + className + ")\n");
+            StepRequest newSr = vm.eventRequestManager().createStepRequest(
+                currentThread, StepRequest.STEP_LINE, sr.depth());
+            newSr.addClassExclusionFilter("java.*");
+            newSr.addClassExclusionFilter("javax.*");
+            newSr.addClassExclusionFilter("sun.*");
+            newSr.addClassExclusionFilter("jdk.*");
+            newSr.addClassExclusionFilter("com.sun.*");
+            newSr.enable();
+            vm.resume();
+            return;
+        }
+
         notifyStop();
         waitForCommand();
         // Apres la commande, on reprend
         vm.resume();
+    }
+
+    // Verifie si c'est une classe du JDK
+    private boolean isJdkClass(String className) {
+        return className.startsWith("java.") ||
+               className.startsWith("javax.") ||
+               className.startsWith("sun.") ||
+               className.startsWith("jdk.") ||
+               className.startsWith("com.sun.");
     }
 
     // Notifie l'interface qu'on s'est arrete
@@ -254,9 +281,15 @@ public class GUIScriptableDebugger {
             vm.eventRequestManager().deleteEventRequest(sr);
         }
 
-        // Cree un nouveau step request
+        // Cree un nouveau step request avec filtres pour ignorer le JDK
         StepRequest sr = vm.eventRequestManager().createStepRequest(
             currentThread, StepRequest.STEP_LINE, depth);
+        // Exclut les classes JDK pour ne pas s'arreter dans le code systeme
+        sr.addClassExclusionFilter("java.*");
+        sr.addClassExclusionFilter("javax.*");
+        sr.addClassExclusionFilter("sun.*");
+        sr.addClassExclusionFilter("jdk.*");
+        sr.addClassExclusionFilter("com.sun.*");
         sr.enable();
 
         waitingForCommand = false;

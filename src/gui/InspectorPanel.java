@@ -17,8 +17,8 @@ public class InspectorPanel extends JPanel {
     private DefaultMutableTreeNode rootNode;
     private DefaultTreeModel treeModel;
 
-    // Limite de profondeur pour eviter les boucles infinies
-    private static final int MAX_DEPTH = 3;
+    // Limite de profondeur pour eviter les arbres gigantesques
+    private static final int MAX_DEPTH = 2;
 
     public InspectorPanel() {
         setLayout(new BorderLayout());
@@ -51,7 +51,6 @@ public class InspectorPanel extends JPanel {
             // 1. Ajoute "this" si c'est une methode d'instance
             ObjectReference thisObj = frame.thisObject();
             if (thisObj != null) {
-                // Noeud racine = "this : TypeDeLObjet"
                 DefaultMutableTreeNode thisNode = createObjectNode("this", thisObj, 0);
                 rootNode.add(thisNode);
             }
@@ -71,58 +70,63 @@ public class InspectorPanel extends JPanel {
         }
 
         treeModel.reload();
-        expandAllNodes();
+        // Deplie seulement le premier niveau (pas tout l'arbre)
+        variableTree.expandRow(0);
     }
 
     // Cree un noeud pour un OBJET (avec ses variables d'instance comme enfants)
-    // Format: "nomVariable : TypeDeLObjet"
     private DefaultMutableTreeNode createObjectNode(String name, ObjectReference obj, int depth) {
-        // Noeud racine affiche le TYPE de l'objet
         String typeName = obj.referenceType().name();
-        // Simplifie le nom du type (enleve le package si trop long)
         String simpleTypeName = simplifyTypeName(typeName);
 
+        // Pour les classes JDK (java.*, javax.*, sun.*), on affiche juste la valeur
+        // sans explorer leurs champs internes
+        if (isJdkClass(typeName)) {
+            String display = getSimpleDisplay(obj, simpleTypeName);
+            return new DefaultMutableTreeNode(name + " : " + simpleTypeName + " = " + display);
+        }
+
+        // Noeud racine affiche le TYPE de l'objet
         String label = name + " : " + simpleTypeName;
         DefaultMutableTreeNode node = new DefaultMutableTreeNode(label);
 
-        // Limite la profondeur pour eviter les boucles infinies
+        // Limite la profondeur
         if (depth >= MAX_DEPTH) {
-            node.add(new DefaultMutableTreeNode("(max depth reached)"));
+            node.add(new DefaultMutableTreeNode("..."));
             return node;
         }
 
         try {
             ReferenceType type = obj.referenceType();
 
-            // Recupere TOUTES les variables d'instance (champs)
-            List<Field> fields = type.allFields();
+            // Utilise fields() au lieu de allFields() pour avoir seulement
+            // les champs declares dans cette classe (pas les herites)
+            List<Field> fields = type.fields();
             Map<Field, Value> values = obj.getValues(fields);
 
             for (Field field : fields) {
-                // Ignore les champs statiques (on veut que les variables d'instance)
+                // Ignore les champs statiques
                 if (field.isStatic()) continue;
 
                 Value value = values.get(field);
                 String fieldTypeName = field.typeName();
 
-                // Cree un noeud enfant pour chaque variable d'instance
                 DefaultMutableTreeNode childNode = createValueNode(field.name(), fieldTypeName, value, depth + 1);
                 node.add(childNode);
             }
 
-            // Si pas de champs, indique que l'objet est vide
             if (node.getChildCount() == 0) {
-                node.add(new DefaultMutableTreeNode("(no instance variables)"));
+                node.add(new DefaultMutableTreeNode("(empty)"));
             }
 
         } catch (Exception e) {
-            node.add(new DefaultMutableTreeNode("(error: " + e.getMessage() + ")"));
+            node.add(new DefaultMutableTreeNode("(error)"));
         }
 
         return node;
     }
 
-    // Cree un noeud pour une VALEUR (peut etre primitive ou objet)
+    // Cree un noeud pour une VALEUR (primitive ou objet)
     private DefaultMutableTreeNode createValueNode(String name, String typeName, Value value, int depth) {
 
         // Cas 1: valeur null
@@ -130,41 +134,72 @@ public class InspectorPanel extends JPanel {
             return new DefaultMutableTreeNode(name + " : " + simplifyTypeName(typeName) + " = null");
         }
 
-        // Cas 2: c'est une String (cas special - on affiche la valeur)
+        // Cas 2: String - affiche directement la valeur
         if (value instanceof StringReference) {
             String strValue = ((StringReference) value).value();
-            // Limite la longueur
-            if (strValue.length() > 50) {
-                strValue = strValue.substring(0, 50) + "...";
+            if (strValue.length() > 40) {
+                strValue = strValue.substring(0, 40) + "...";
             }
             return new DefaultMutableTreeNode(name + " : String = \"" + strValue + "\"");
         }
 
-        // Cas 3: c'est un objet (pas une primitive) -> noeud avec enfants
+        // Cas 3: Tableau - affiche le type et la taille
+        if (value instanceof ArrayReference) {
+            ArrayReference arr = (ArrayReference) value;
+            String simpleType = simplifyTypeName(typeName);
+            return new DefaultMutableTreeNode(name + " : " + simpleType + " (length=" + arr.length() + ")");
+        }
+
+        // Cas 4: Objet - cree un noeud avec enfants (sauf pour JDK)
         if (value instanceof ObjectReference) {
             return createObjectNode(name, (ObjectReference) value, depth);
         }
 
-        // Cas 4: c'est une primitive (int, boolean, etc.) -> feuille simple
+        // Cas 5: Primitive (int, boolean, etc.)
         String simpleType = simplifyTypeName(typeName);
         return new DefaultMutableTreeNode(name + " : " + simpleType + " = " + value.toString());
     }
 
+    // Verifie si c'est une classe du JDK (qu'on ne veut pas explorer en profondeur)
+    private boolean isJdkClass(String fullTypeName) {
+        return fullTypeName.startsWith("java.") ||
+               fullTypeName.startsWith("javax.") ||
+               fullTypeName.startsWith("sun.") ||
+               fullTypeName.startsWith("jdk.") ||
+               fullTypeName.startsWith("com.sun.");
+    }
+
+    // Retourne un affichage simple pour les objets JDK
+    private String getSimpleDisplay(ObjectReference obj, String simpleType) {
+        try {
+            // Pour certains types, on peut afficher une valeur utile
+            String fullType = obj.referenceType().name();
+
+            if (fullType.equals("java.lang.Integer") ||
+                fullType.equals("java.lang.Long") ||
+                fullType.equals("java.lang.Double") ||
+                fullType.equals("java.lang.Float") ||
+                fullType.equals("java.lang.Boolean") ||
+                fullType.equals("java.lang.Character")) {
+                // Wrapper types - invoke toString()
+                return obj.toString();
+            }
+
+            // Pour les autres, affiche juste l'id
+            return "(id=" + obj.uniqueID() + ")";
+
+        } catch (Exception e) {
+            return "(?)";
+        }
+    }
+
     // Simplifie un nom de type (enleve le package)
-    // Ex: "java.lang.String" -> "String"
     private String simplifyTypeName(String fullTypeName) {
         int lastDot = fullTypeName.lastIndexOf('.');
         if (lastDot >= 0) {
             return fullTypeName.substring(lastDot + 1);
         }
         return fullTypeName;
-    }
-
-    // Deplie tous les noeuds de l'arbre
-    private void expandAllNodes() {
-        for (int i = 0; i < variableTree.getRowCount(); i++) {
-            variableTree.expandRow(i);
-        }
     }
 
     // Efface l'arbre

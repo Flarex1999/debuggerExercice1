@@ -184,6 +184,12 @@ public class ScriptableDebugger {
                         StepRequest.STEP_LINE,  // LINE pour stepper ligne par ligne
                         stepType
                 );
+        // Exclut les classes JDK pour ne pas s'arreter dans le code systeme
+        stepRequest.addClassExclusionFilter("java.*");
+        stepRequest.addClassExclusionFilter("javax.*");
+        stepRequest.addClassExclusionFilter("sun.*");
+        stepRequest.addClassExclusionFilter("jdk.*");
+        stepRequest.addClassExclusionFilter("com.sun.*");
         stepRequest.enable();
     }
 

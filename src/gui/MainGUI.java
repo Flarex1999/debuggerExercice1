@@ -1,6 +1,7 @@
 package gui;
 
 import dbg.JDISimpleDebuggee;
+// import dbg.TestDebuggee;  // Alternative pour tester l'Inspector avec des objets
 
 import javax.swing.*;
 
